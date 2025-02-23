@@ -39,4 +39,25 @@ The model is implemented based on the **Transformer** architecture from *"Attent
 - **Multi-Head Self-Attention**: Captures dependencies between words  
 - **Feed-Forward Layers**: Improves feature extraction  
 - **Positional Encodings**: Provides sequence information  
-- **Layer Normalization & Dropout**: Enhances training stability 
+- **Layer Normalization & Dropout**: Enhances training stability
+
+## 🏋️ Training the Model  
+We train the model on **Lambda GPU Cloud**, with an alternative notebook implementation using **Google Colab**.
+
+### Train on Lambda GPU Cloud**
+```bash
+python train.py --epochs 50 --batch_size 32 --lr 3e-4
+```
+
+### 🧪 Running the Model</br>
+To generate text using the trained model:</br>
+```bash
+python gpt.py --prompt "Once upon a time"
+```
+
+To fine-tune the model on a custom dataset:</br>
+```bash
+python train.py --data_path data/custom.txt --epochs 20
+```
+
+
