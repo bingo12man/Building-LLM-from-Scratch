@@ -29,6 +29,7 @@ cd LLM-from-Scratch
 python -m venv llm_env
 source llm_env/bin/activate  # On Windows, use `llm_env\Scripts\activate`
 pip install -r requirements.txt
+```
 
 ## 🏛️ Model Architecture  
 The model is implemented based on the **Transformer** architecture from *"Attention is All You Need"*, focusing on self-attention mechanisms and multi-head attention.
