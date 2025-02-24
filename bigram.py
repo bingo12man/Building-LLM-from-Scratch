@@ -1,122 +1,187 @@
 import torch
 import torch.nn as nn
+import torch.optim as optim
 from torch.nn import functional as F
 
-# hyperparameters
-batch_size = 32 # how many independent sequences will we process in parallel?
-block_size = 8 # what is the maximum context length for predictions?
-max_iters = 3000
-eval_interval = 300
-learning_rate = 1e-2
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-eval_iters = 200
-# ------------
+# -----------------------
+# Hyperparameters
+# -----------------------
+BATCH_SIZE = 32  # Number of sequences processed in parallel
+BLOCK_SIZE = 8  # Context window size for predictions
+MAX_ITERS = 3000  # Number of training iterations
+EVAL_INTERVAL = 300  # Interval for evaluating loss
+LEARNING_RATE = 1e-2  # Learning rate for optimizer
+DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'  # Use GPU if available
+EVAL_ITERS = 200  # Number of evaluations to average loss
+SEED = 1337  # Random seed for reproducibility
 
-torch.manual_seed(1337)
+torch.manual_seed(SEED)
 
-# wget https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt
-with open('input.txt', 'r', encoding='utf-8') as f:
-    text = f.read()
+# -----------------------
+# Load Dataset
+# -----------------------
 
-# here are all the unique characters that occur in this text
-chars = sorted(list(set(text)))
-vocab_size = len(chars)
-# create a mapping from characters to integers
-stoi = { ch:i for i,ch in enumerate(chars) }
-itos = { i:ch for i,ch in enumerate(chars) }
-encode = lambda s: [stoi[c] for c in s] # encoder: take a string, output a list of integers
-decode = lambda l: ''.join([itos[i] for i in l]) # decoder: take a list of integers, output a string
+# Read input text file
+with open('input.txt', 'r', encoding='utf-8') as file:
+    text_data = file.read()
 
-# Train and test splits
-data = torch.tensor(encode(text), dtype=torch.long)
-n = int(0.9*len(data)) # first 90% will be train, rest val
-train_data = data[:n]
-val_data = data[n:]
+# Extract unique characters and define vocabulary
+char_set = sorted(set(text_data))
+VOCAB_SIZE = len(char_set)
 
-# data loading
+# Create mappings: character to index and index to character
+char_to_idx = {char: idx for idx, char in enumerate(char_set)}
+idx_to_char = {idx: char for idx, char in enumerate(char_set)}
+
+# Encoding function: Convert string to list of integers
+def encode(text):
+    return [char_to_idx[char] for char in text]
+
+# Decoding function: Convert list of integers back to string
+def decode(indices):
+    return ''.join(idx_to_char[idx] for idx in indices)
+
+# Convert text data to tensor representation
+data = torch.tensor(encode(text_data), dtype=torch.long)
+
+# Split dataset into training (90%) and validation (10%)
+split_idx = int(0.9 * len(data))
+train_data, val_data = data[:split_idx], data[split_idx:]
+
+# -----------------------
+# Data Loading Function
+# -----------------------
+
 def get_batch(split):
-    # generate a small batch of data of inputs x and targets y
-    data = train_data if split == 'train' else val_data
-    ix = torch.randint(len(data) - block_size, (batch_size,))
-    x = torch.stack([data[i:i+block_size] for i in ix])
-    y = torch.stack([data[i+1:i+block_size+1] for i in ix])
-    x, y = x.to(device), y.to(device)
-    return x, y
+    """
+    Generate a batch of training or validation data.
+
+    Args:
+        split (str): 'train' for training set, 'val' for validation set
+
+    Returns:
+        x (Tensor): Input data of shape (BATCH_SIZE, BLOCK_SIZE)
+        y (Tensor): Target data of shape (BATCH_SIZE, BLOCK_SIZE)
+    """
+    dataset = train_data if split == 'train' else val_data
+    idx = torch.randint(len(dataset) - BLOCK_SIZE, (BATCH_SIZE,))
+    x = torch.stack([dataset[i:i+BLOCK_SIZE] for i in idx])
+    y = torch.stack([dataset[i+1:i+BLOCK_SIZE+1] for i in idx])
+    return x.to(DEVICE), y.to(DEVICE)
+
+# -----------------------
+# Loss Estimation Function
+# -----------------------
 
 @torch.no_grad()
 def estimate_loss():
-    out = {}
+    """
+    Evaluate model performance on training and validation sets.
+
+    Returns:
+        dict: Averaged loss for both training and validation sets.
+    """
+    loss_dict = {}
     model.eval()
     for split in ['train', 'val']:
-        losses = torch.zeros(eval_iters)
-        for k in range(eval_iters):
-            X, Y = get_batch(split)
-            logits, loss = model(X, Y)
-            losses[k] = loss.item()
-        out[split] = losses.mean()
+        losses = torch.zeros(EVAL_ITERS)
+        for i in range(EVAL_ITERS):
+            X_batch, Y_batch = get_batch(split)
+            _, loss = model(X_batch, Y_batch)
+            losses[i] = loss.item()
+        loss_dict[split] = losses.mean()
     model.train()
-    return out
+    return loss_dict
 
-# super simple bigram model
+# -----------------------
+# Bigram Language Model
+# -----------------------
+
 class BigramLanguageModel(nn.Module):
-
+    """
+    A simple Bigram Language Model using an embedding table.
+    """
+    
     def __init__(self, vocab_size):
         super().__init__()
-        # each token directly reads off the logits for the next token from a lookup table
-        self.token_embedding_table = nn.Embedding(vocab_size, vocab_size)
+        # Lookup table mapping tokens to logits
+        self.embedding_table = nn.Embedding(vocab_size, vocab_size)
 
-    def forward(self, idx, targets=None):
+    def forward(self, input_indices, targets=None):
+        """
+        Forward pass through the model.
 
-        # idx and targets are both (B,T) tensor of integers
-        logits = self.token_embedding_table(idx) # (B,T,C)
+        Args:
+            input_indices (Tensor): Input token indices of shape (BATCH_SIZE, BLOCK_SIZE)
+            targets (Tensor, optional): Target indices for computing loss.
 
-        if targets is None:
-            loss = None
-        else:
-            B, T, C = logits.shape
-            logits = logits.view(B*T, C)
-            targets = targets.view(B*T)
+        Returns:
+            logits (Tensor): Model predictions of shape (BATCH_SIZE, BLOCK_SIZE, VOCAB_SIZE)
+            loss (Tensor, optional): Cross-entropy loss if targets are provided.
+        """
+        logits = self.embedding_table(input_indices)  # Shape: (BATCH_SIZE, BLOCK_SIZE, VOCAB_SIZE)
+
+        loss = None
+        if targets is not None:
+            B, T, C = logits.shape  # Extract batch size, time steps, and vocab size
+            logits = logits.view(B*T, C)  # Reshape for loss computation
+            targets = targets.view(B*T)  # Reshape targets
             loss = F.cross_entropy(logits, targets)
 
         return logits, loss
 
-    def generate(self, idx, max_new_tokens):
-        # idx is (B, T) array of indices in the current context
-        for _ in range(max_new_tokens):
-            # get the predictions
-            logits, loss = self(idx)
-            # focus only on the last time step
-            logits = logits[:, -1, :] # becomes (B, C)
-            # apply softmax to get probabilities
-            probs = F.softmax(logits, dim=-1) # (B, C)
-            # sample from the distribution
-            idx_next = torch.multinomial(probs, num_samples=1) # (B, 1)
-            # append sampled index to the running sequence
-            idx = torch.cat((idx, idx_next), dim=1) # (B, T+1)
-        return idx
+    def generate(self, context, max_tokens):
+        """
+        Generate text using the trained model.
 
-model = BigramLanguageModel(vocab_size)
-m = model.to(device)
+        Args:
+            context (Tensor): Initial input sequence of shape (1, T)
+            max_tokens (int): Maximum number of tokens to generate.
 
-# create a PyTorch optimizer
-optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+        Returns:
+            Tensor: Generated token sequence.
+        """
+        for _ in range(max_tokens):
+            logits, _ = self(context)  # Forward pass
+            logits = logits[:, -1, :]  # Focus on the last token
+            probs = F.softmax(logits, dim=-1)  # Convert to probability distribution
+            next_token = torch.multinomial(probs, num_samples=1)  # Sample the next token
+            context = torch.cat((context, next_token), dim=1)  # Append token to context
+        return context
 
-for iter in range(max_iters):
+# -----------------------
+# Model Training
+# -----------------------
 
-    # every once in a while evaluate the loss on train and val sets
-    if iter % eval_interval == 0:
-        losses = estimate_loss()
-        print(f"step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+# Initialize model and move to device
+model = BigramLanguageModel(VOCAB_SIZE).to(DEVICE)
 
-    # sample a batch of data
+# Define optimizer
+optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+
+# Training loop
+for step in range(MAX_ITERS):
+    
+    # Evaluate loss at intervals
+    if step % EVAL_INTERVAL == 0:
+        loss_values = estimate_loss()
+        print(f"Step {step}: Train Loss: {loss_values['train']:.4f}, Val Loss: {loss_values['val']:.4f}")
+
+    # Fetch a batch of training data
     xb, yb = get_batch('train')
 
-    # evaluate the loss
+    # Compute loss and update model weights
     logits, loss = model(xb, yb)
-    optimizer.zero_grad(set_to_none=True)
+    optimizer.zero_grad()
     loss.backward()
     optimizer.step()
 
-# generate from the model
-context = torch.zeros((1, 1), dtype=torch.long, device=device)
-print(decode(m.generate(context, max_new_tokens=500)[0].tolist()))
+# -----------------------
+# Text Generation
+# -----------------------
+
+# Generate new text using the trained model
+start_context = torch.zeros((1, 1), dtype=torch.long, device=DEVICE)
+generated_text = decode(model.generate(start_context, max_tokens=500)[0].tolist())
+
+print("Generated Text:\n", generated_text)
