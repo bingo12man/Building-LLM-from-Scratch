@@ -58,6 +58,6 @@ python gpt.py --prompt "Once upon a time"
 To fine-tune the model on a custom dataset:</br>
 ```bash
 python train.py --data_path data/custom.txt --epochs 20
-```
+``` 
 
 
